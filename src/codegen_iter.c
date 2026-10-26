@@ -6110,6 +6110,16 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
 /* emit_iteration_stmt_body's Range#each with and without a block parameter,
    Integer#upto / downto, and String#upto (answers 1 emitted, 0 declined, -1
    to go on) */
+/* Is n, the count or the limit of an Integer block loop (`n.times`,
+   `a.upto(n)`), an Integer literal? Only such a one can sit in the loop's
+   condition as it is. Ruby takes any other once, ahead of the first pass,
+   and the body, a proc it calls or a trap may change what it reads (a local
+   by any binding, an ivar, a global, a constant): it goes into a temp ahead
+   of the loop, which the C compiler folds where nothing changes it. */
+static int iter_bound_literal(const NodeTable *nt, int n) {
+  return nt_kind(nt, nt_paren_single(nt, n)) == NK_IntegerNode;
+}
+
 static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, int block, const char *name, int recv, int body, const char *p0_orig, const char *p0, TyKind rt) {
   /* ("a".."e").each { |s| ... } -- a string-endpoint range has no int sp_Range
      representation, so materialize the succ-sequence as a StrArray and loop over
@@ -6251,20 +6261,30 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
        not compile against it (#4665). A typed limit stays as it is: a Float
        one compares as a Float (`-5.upto(-1.3)` stops at -2). */
     Buf hi; memset(&hi, 0, sizeof hi);
-    if (repr_of(c, argv[0]).kind == RK_BOXED) emit_int_expr(c, argv[0], &hi);
+    int boxed = repr_of(c, argv[0]).kind == RK_BOXED;
+    if (boxed) emit_int_expr(c, argv[0], &hi);
     else emit_expr(c, argv[0], &hi);
+    int lim_float = comp_ntype(c, argv[0]) == TY_FLOAT;
     int ti = ++g_tmp;
-    /* the limit sits in the loop condition, so a side-effecting one would be
-       re-evaluated every round: it is computed once in Ruby */
-    if (subtree_has_side_effect(c, argv[0])) {
+    /* the limit sits in the loop condition, where it would be evaluated
+       every round: unless it is a literal (iter_bound_literal), it is taken
+       once, a Float one as a Float, after the receiver, as Ruby takes them */
+    if (!iter_bound_literal(nt, argv[0])) {
+      if (subtree_has_side_effect(c, recv)) {
+        int tl = ++g_tmp;
+        emit_indent(b, indent);
+        buf_printf(b, "sp_int _t%d = %s;\n", tl, lo.p ? lo.p : "0");
+        free(lo.p); memset(&lo, 0, sizeof lo);
+        buf_printf(&lo, "_t%d", tl);
+      }
       int th = ++g_tmp;
       emit_indent(b, indent);
-      buf_printf(b, "sp_int _t%d = %s;\n", th, hi.p ? hi.p : "0");
+      buf_printf(b, "%s _t%d = %s;\n", lim_float && !boxed ? "sp_float" : "sp_int", th, hi.p ? hi.p : "0");
       free(hi.p); memset(&hi, 0, sizeof hi);
       buf_printf(&hi, "_t%d", th);
     }
     emit_indent(b, indent);
-    if (comp_ntype(c, argv[0]) == TY_FLOAT) {
+    if (lim_float) {
       buf_printf(b, "for (sp_int _t%d = ", ti); buf_puts(b, lo.p);
       buf_printf(b, "; _t%d %s ", ti, up ? "<=" : ">="); buf_puts(b, hi.p);
       buf_printf(b, "; _t%d%s) {\n", ti, up ? "++" : "--");
@@ -8013,8 +8033,10 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     emit_int_expr(c, recv, &rb);
     /* The count is evaluated ONCE, so a receiver that can change (or change
        something) between rounds has to be hoisted: spliced into the loop
-       condition, `rng.next_int(n).times` re-rolled the die every round. */
-    if (subtree_has_side_effect(c, recv)) {
+       condition, `rng.next_int(n).times` re-rolled the die every round, and
+       `n.times { n = 2 }` stopped after two: anything but a literal is
+       taken once (iter_bound_literal) */
+    if (!iter_bound_literal(nt, recv)) {
       int tn = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "sp_int _t%d = %s;\n", tn, rb.p ? rb.p : "0");
