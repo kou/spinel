@@ -11759,23 +11759,6 @@ static int hcp_val(Compiler *c, int n, int depth) {
   }
   return 0;
 }
-/* No method of the program's named in one of the lists ops can stand in for
-   the builtin one on a value of the classes cls: none defined on one of them
-   or a class or module it reaches, nor at the top level (Object's), where a
-   `coerce` is no operand's */
-static int ops_builtin(Compiler *c, const char *const *cls, const char *const *const *ops) {
-  for (int k = 0; k < c->nclasses; k++) {
-    if (!hcp_in(cls, c->classes[k].name)) continue;
-    for (int l = 0; ops[l]; l++)
-      for (int i = 0; ops[l][i]; i++) if (comp_method_in_chain(c, k, ops[l][i], NULL) >= 0) return 0;
-  }
-  for (int s = 1; s < c->nscopes; s++) {
-    const char *nm = c->scopes[s].name;
-    if (c->scopes[s].class_id >= 0 || !nm || sp_streq(nm, "coerce")) continue;
-    for (int l = 0; ops[l]; l++) if (hcp_in(ops[l], nm)) return 0;
-  }
-  return 1;
-}
 /* No operator of the program's can stand in for the builtin one on an Integer
    or a nil */
 static int hcp_program_ok(Compiler *c) {
@@ -11783,7 +11766,7 @@ static int hcp_program_ok(Compiler *c) {
                                      "BasicObject", NULL };
   static const char *const MORE[] = { "-@", "coerce", NULL };
   static const char *const *const OPS[] = { HCP_ARITH, HCP_CMP, MORE, NULL };
-  return ops_builtin(c, CLS, OPS);
+  return comp_ops_builtin(c, CLS, OPS);
 }
 /* The named scopes by name, from scope 1 on: a name's first scope, and
    whether another scope has the name. hcp_param_method wants a name no
@@ -12991,7 +12974,7 @@ static int hv_ops_ok(Compiler *c) {
   static const char *const CLS[] = { "Integer", "Float", "Numeric", "Comparable", "Object", "Kernel",
                                      "BasicObject", NULL };
   static const char *const *const OPS[] = { HV_OPS, NULL };
-  if (!g_hv_ops) g_hv_ops = ops_builtin(c, CLS, OPS) ? 1 : -1;
+  if (!g_hv_ops) g_hv_ops = comp_ops_builtin(c, CLS, OPS) ? 1 : -1;
   return g_hv_ops > 0;
 }
 

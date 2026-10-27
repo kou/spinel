@@ -2867,6 +2867,27 @@ int comp_iob_sym_type(const char *name) {
   return -1;
 }
 int comp_iob_ty_is_float(int t) { return t >= 14 && t <= 17; }
+/* No method of the program's named in one of the lists ops can stand in for
+   the builtin one on a value of the classes cls: none defined on one of them
+   or a class or module it reaches, nor at the top level (Object's), where a
+   `coerce` is no operand's */
+static int ops_in(const char *const *l, const char *nm) {
+  for (int i = 0; nm && l[i]; i++) if (sp_streq(nm, l[i])) return 1;
+  return 0;
+}
+int comp_ops_builtin(Compiler *c, const char *const *cls, const char *const *const *ops) {
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!ops_in(cls, c->classes[k].name)) continue;
+    for (int l = 0; ops[l]; l++)
+      for (int i = 0; ops[l][i]; i++) if (comp_method_in_chain(c, k, ops[l][i], NULL) >= 0) return 0;
+  }
+  for (int s = 1; s < c->nscopes; s++) {
+    const char *nm = c->scopes[s].name;
+    if (c->scopes[s].class_id >= 0 || !nm || sp_streq(nm, "coerce")) continue;
+    for (int l = 0; ops[l]; l++) if (ops_in(ops[l], nm)) return 0;
+  }
+  return 1;
+}
 /* a code's width and byte order (sp_iob_width, sp_iob_big_endian), and
    whether an integer one is signed (an odd code) */
 int comp_iob_ty_width(int t) { return t >= 14 ? (t == 14 || t == 16 ? 4 : 8) : t <= 1 ? 1 : t <= 5 ? 2 : t <= 9 ? 4 : 8; }
